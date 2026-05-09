@@ -2228,7 +2228,7 @@ class Player {
     processInput(input, dt, room) {
         if (typeof input.cameraYaw === 'number') this.cameraYaw = input.cameraYaw;
         if (typeof input.cameraPitch === 'number') this.cameraPitch = clamp(input.cameraPitch, -1.4, 1.4);
-        let mx = 0, mz = 0;
+ let mx = 0, mz = 0;
         if (input.forward) mz -= 1;
         if (input.backward) mz += 1;
         if (input.left) mx -= 1;
@@ -2236,16 +2236,28 @@ class Player {
         const len = Math.sqrt(mx * mx + mz * mz);
         if (len > 0) {
             mx /= len; mz /= len;
-            const cos = Math.cos(this.cameraYaw), sin = Math.sin(this.cameraYaw);
-            const wx = mx * cos - mz * sin;
-            const wz = mx * sin + mz * cos;
+            // Camera-relative movement: yaw rotates input vector to world space
+            const yaw = this.cameraYaw;
+            const wx = mx * Math.cos(yaw) + mz * Math.sin(yaw);
+            const wz = -mx * Math.sin(yaw) + mz * Math.cos(yaw);
             const speed = this.character.stats.moveSpeed * this.getMoveSpeedMultiplier();
             const ctrl = this.onGround ? 1 : CONFIG.AIR_CONTROL;
-            this.velocity.x = lerp(this.velocity.x, wx * speed, ctrl * dt * 8);
-            this.velocity.z = lerp(this.velocity.z, wz * speed, ctrl * dt * 8);
-            this.rotation = Math.atan2(wx, wz);
+            const tt = Math.min(1, ctrl * dt * 12);
+            this.velocity.x = lerp(this.velocity.x, wx * speed, tt);
+            this.velocity.z = lerp(this.velocity.z, wz * speed, tt);
+            // Face movement direction (only if not locked-on)
+            if (!this.lockOnTarget) {
+                this.rotation = Math.atan2(wx, wz);
+            } else {
+                const lt = room.players.get(this.lockOnTarget);
+                if (lt && !lt.dead) {
+                    this.rotation = Math.atan2(lt.position.x - this.position.x, lt.position.z - this.position.z);
+                }
+            }
         } else if (this.onGround) {
-            this.velocity.x = lerp(this.velocity.x, 0, dt * CONFIG.FRICTION);
+            this.velocity.x = lerp(this.velocity.x, 0, Math.min(1, dt * CONFIG.FRICTION));
+            this.velocity.z = lerp(this.velocity.z, 0, Math.min(1, dt * CONFIG.FRICTION));
+        }            this.velocity.x = lerp(this.velocity.x, 0, dt * CONFIG.FRICTION);
             this.velocity.z = lerp(this.velocity.z, 0, dt * CONFIG.FRICTION);
         }
         if (input.jump && !this.jumpHeld) {
@@ -2322,20 +2334,32 @@ class Player {
         this.position.x = clamp(this.position.x, -half, half);
         this.position.z = clamp(this.position.z, -half, half);
         this.onGround = false;
-        if (this.position.y <= 1) {
-            this.position.y = 1; this.velocity.y = 0;
-            this.onGround = true; this.canDoubleJump = true;
+        // Ground - player position.y = bottom of feet, model offset handles rest
+        if (this.position.y <= 1.0) {
+            this.position.y = 1.0;
+            this.velocity.y = 0;
+            this.onGround = true;
+            this.canDoubleJump = true;
         }
+        // Platforms - check feet-on-top
         for (const plat of room.map.platforms) {
-            if (this.position.x > plat.x - plat.w / 2 - 0.5 && this.position.x < plat.x + plat.w / 2 + 0.5 &&
-                this.position.z > plat.z - plat.d / 2 - 0.5 && this.position.z < plat.z + plat.d / 2 + 0.5) {
-                const top = plat.y + plat.h / 2;
-                if (this.position.y >= top - 0.5 && this.position.y <= top + 0.5 && this.velocity.y <= 0) {
-                    this.position.y = top + 0.01; this.velocity.y = 0;
-                    this.onGround = true; this.canDoubleJump = true;
+            const px = plat.x, pz = plat.z, py = plat.y;
+            const hw = plat.w / 2, hd = plat.d / 2, hh = plat.h / 2;
+            const top = py + hh;
+            const inX = this.position.x > px - hw - 0.4 && this.position.x < px + hw + 0.4;
+            const inZ = this.position.z > pz - hd - 0.4 && this.position.z < pz + hd + 0.4;
+            if (inX && inZ) {
+                // Standing on top
+                if (this.position.y >= top - 0.1 && this.position.y <= top + 1.0 && this.velocity.y <= 0) {
+                    this.position.y = top + 1.0;
+                    this.velocity.y = 0;
+                    this.onGround = true;
+                    this.canDoubleJump = true;
                 }
             }
         }
+        if (this.position.y < CONFIG.MIN_Y_DEATH) this.die(null, room);
+    }
         if (this.position.y < CONFIG.MIN_Y_DEATH) this.die(null, room);
     }
 
@@ -2420,14 +2444,26 @@ class Room {
         return true;
     }
 
-    endMatch(winnerName) {
+        endMatch(winnerName) {
         this.state = 'ended';
-        const standings = [...this.players.values()].sort((a, b) => b.score - a.score).map(p => ({
-            name: p.name, character: p.characterId, score: p.score, kills: p.kills, deaths: p.deaths, team: p.team
+        const standings = [...this.players.values()].sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            if (b.kills !== a.kills) return b.kills - a.kills;
+            return b.damageDealt - a.damageDealt;
+        }).map(p => ({
+            name: p.name,
+            character: p.characterId,
+            score: p.score,
+            kills: p.kills,
+            deaths: p.deaths,
+            damageDealt: Math.round(p.damageDealt),
+            damageTaken: Math.round(p.damageTaken),
+            team: p.team
         }));
         this.io.to(this.id).emit('matchEnd', { winner: winnerName, standings, teamScores: this.teamScores });
         setTimeout(() => { this.state = 'lobby'; this.io.to(this.id).emit('returnToLobby'); }, 8000);
     }
+
 
     update(dt) {
         if (this.state !== 'playing') return;
