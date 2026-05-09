@@ -1111,7 +1111,7 @@ function syncPlayers() {
             G.playerMeshes.set(p.id, mesh);
         }
         const ip = getInterpolatedPlayer(p.id);
-        mesh.position.set(ip.position.x, ip.position.y - 1.0, ip.position.z);
+        mesh.position.set(ip.position.x, ip.position.y - 1.0 + 0.4, ip.position.z);
         mesh.rotation.y = ip.rotation;
         mesh.visible = !p.dead;
         updateHpBar(mesh, p.hp, p.maxHp);
@@ -1724,14 +1724,15 @@ function showMatchEnd(data) {
     screen.classList.remove('hidden');
     document.getElementById('match-end-winner').textContent = (data.winner || 'Match Over') + ' WINS!';
     const stWrap = document.getElementById('match-standings');
-    stWrap.innerHTML = '<div class="standing-row" style="font-weight:bold;color:#ffdd44"><div>#</div><div>Player</div><div>Character</div><div>K</div><div>D</div></div>';
+    stWrap.innerHTML = '<div class="standing-row" style="font-weight:bold;color:#ffdd44"><div>#</div><div>Player</div><div>Character</div><div>K</div><div>D</div><div>DMG</div></div>';
     let i = 0;
     for (const s of data.standings) {
         i++;
         const row = document.createElement('div');
         row.className = 'standing-row' + (i === 1 ? ' gold' : (i === 2 ? ' silver' : (i === 3 ? ' bronze' : '')));
         const cdef = G.characterDefs[s.character];
-        row.innerHTML = `<div>${i}</div><div>${escapeHtml(s.name)}</div><div>${cdef ? cdef.name : '?'}</div><div>${s.kills}</div><div>${s.deaths}</div>`;
+        const dmg = (s.damageDealt !== undefined) ? s.damageDealt : 0;
+        row.innerHTML = `<div>${i}</div><div>${escapeHtml(s.name)}</div><div>${cdef ? cdef.name : '?'}</div><div>${s.kills}</div><div>${s.deaths}</div><div>${dmg}</div>`;
         stWrap.appendChild(row);
     }
 }
